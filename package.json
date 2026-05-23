@@ -1,0 +1,21 @@
+{
+  "name": "audit-pro",
+  "version": "0.5.1",
+  "description": "Lalavn Deep Audit (Pro) — SEO + GEO audit CLI cho khách hàng trả tiền. Không AI, không DB, không browser automation.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "audit-pro": "./run.mjs"
+  },
+  "scripts": {
+    "audit": "node run.mjs",
+    "start": "node run.mjs"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "fast-xml-parser": "^4.5.0"
+  }
+}
