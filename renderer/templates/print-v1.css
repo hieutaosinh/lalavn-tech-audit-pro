@@ -1,0 +1,28 @@
+@page {
+  size: A4;
+  margin: 14mm;
+}
+
+@media print {
+  body {
+    background: #fff !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .page,
+  .cover {
+    break-after: page;
+    page-break-after: always;
+  }
+
+  .avoid-break,
+  .card,
+  table tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
+
