@@ -15,3 +15,5 @@ jobs:
           node-version: 20
       - run: npm install
       - run: npm test
+      - run: npm run smoke
+      - run: npm run audit:deps
