@@ -33,7 +33,7 @@
 const NL_STR = String.fromCharCode(10);
 
 import { writeFile, mkdir, readFile, readdir, access } from "node:fs/promises";
-import { resolve, join, dirname } from "node:path";
+import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { performance } from "node:perf_hooks";
 
@@ -72,8 +72,9 @@ import {
   analyzeCrawlableLinks,
   analyzeSiteForGoogleAI,
 } from "./lib/google-ai-guide.mjs";
+import { classifyExternalLinkResults, computeIssueCounts, computeSiteScore } from "./lib/hardening.mjs";
 
-const TOOL_VERSION = "0.5.1";
+const TOOL_VERSION = "0.6.0";
 
 // ─────────────────────────────────────────────────────────────────
 // CLI args
@@ -220,9 +221,8 @@ async function main() {
     geoSignalsByUrl.set(page.finalUrl, geoResult.signals);
     geoIssuesByUrl.set(page.finalUrl, geoResult.issues);
 
-    // Google AI guide per-page checks (preview controls, schema completeness,
+    // Google AI guidance per-page checks (preview controls, schema completeness,
     // freshness, interstitial, JS rendering, soft 404, crawlable links).
-    // Tất cả issue có flag googleOfficial: true.
     const previewResult = await analyzePreviewControls(page);
     const articleResult = analyzeArticleSchemaForAI(signals.schemas);
     const productResult = analyzeProductSchemaForAI(signals.schemas);
@@ -295,9 +295,8 @@ async function main() {
     ? analyzeSecurityHeaders(homepage.headers || {}, homepage.finalUrl || homepage.url)
     : { issues: [], signals: { present: {}, missing: [], compression: "unknown" } };
 
-  // ── 2f. Google AI guide site-level checks ────────────────────────
-  // Googlebot access (independent of AI bots), crawl budget waste,
-  // topic cluster coverage cho query fan-out.
+  // ── 2f. Google AI guidance site-level checks ─────────────────────
+  // Googlebot access, crawl budget waste, topic cluster coverage cho query fan-out.
   const googleAiAnalysis = analyzeSiteForGoogleAI({
     robotsTxt: crawlResult.robots,
     pages: crawlResult.pages,
@@ -324,8 +323,12 @@ async function main() {
     brokenLinkResult = await checkBrokenLinks(externalLinkSet, config.crawl, ({ done, total }) => {
       if (done % 10 === 0 || done === total) process.stdout.write(`\r    [${done}/${total}]    `);
     });
+    brokenLinkResult.classification = classifyExternalLinkResults(brokenLinkResult.results);
     process.stdout.write(NL_STR);
-    console.log(`  ✓ Broken link check: ${brokenLinkResult.broken.length} broken / ${brokenLinkResult.sample} checked`);
+    console.log(
+      `  ✓ External link check: ${brokenLinkResult.classification.confirmedBroken.length} confirmed broken · ` +
+      `${brokenLinkResult.classification.blocked.length} blocked · ${brokenLinkResult.classification.timeoutOrNetwork.length} timeout/network / ${brokenLinkResult.sample} checked`
+    );
   }
 
   // ── 5. Aggregate issues ────────────────────────────────────────
@@ -356,23 +359,37 @@ async function main() {
     });
   }
 
-  if (brokenLinkResult && brokenLinkResult.broken.length > 0) {
-    allIssues.push({ severity: "warning", code: "BROKEN_EXTERNAL_LINK", message: `${brokenLinkResult.broken.length} external link broken trong sample`, area: "links" });
+  if (brokenLinkResult) {
+    const c = brokenLinkResult.classification || classifyExternalLinkResults(brokenLinkResult.results);
+    if (c.confirmedBroken.length > 0) {
+      allIssues.push({
+        severity: "warning",
+        code: "BROKEN_EXTERNAL_LINK",
+        message: `${c.confirmedBroken.length} external link xác nhận broken trong sample`,
+        area: "links",
+        sample: c.confirmedBroken.slice(0, 5),
+      });
+    }
+    if (c.blocked.length + c.timeoutOrNetwork.length + c.unknown.length > 0) {
+      allIssues.push({
+        severity: "info",
+        code: "EXTERNAL_LINK_UNVERIFIED",
+        message: `${c.blocked.length + c.timeoutOrNetwork.length + c.unknown.length} external link chưa xác minh được do block/timeout/network — cần manual verify trước khi gọi là broken`,
+        area: "links",
+        confidence: "low",
+        manualVerify: true,
+      });
+    }
   }
 
   // ── 6. Score ───────────────────────────────────────────────────
-  const issueCounts = {
-    critical: allIssues.filter((i) => i.severity === "critical").length,
-    warning: allIssues.filter((i) => i.severity === "warning").length,
-    info: allIssues.filter((i) => i.severity === "info").length,
-  };
-  let score = 100 - issueCounts.critical * 8 - issueCounts.warning * 3 - issueCounts.info * 1;
-  if (score < 0) score = 0;
+  const issueCounts = computeIssueCounts(allIssues);
+  const score = computeSiteScore(allIssues, crawlResult.pages.length);
 
   // Top issues by code
   const byCode = new Map();
   for (const i of allIssues) {
-    if (!byCode.has(i.code)) byCode.set(i.code, { code: i.code, severity: i.severity, area: i.area, count: 0, sampleMessage: i.message });
+    if (!byCode.has(i.code)) byCode.set(i.code, { code: i.code, severity: i.severity, area: i.area, count: 0, sampleMessage: i.message, confidence: i.confidence || "high" });
     byCode.get(i.code).count++;
   }
   const topIssues = [...byCode.values()].sort((a, b) => {
@@ -460,6 +477,10 @@ async function main() {
     },
     summary: {
       score,
+      scoring: {
+        version: "v0.6-normalized-by-page-count-and-confidence",
+        note: "Score được normalize theo số URL crawl và giảm trọng số cho issue confidence thấp/manual verify.",
+      },
       totalIssues: allIssues.length,
       issueCounts,
       topIssues,
