@@ -72,9 +72,31 @@ import {
   analyzeCrawlableLinks,
   analyzeSiteForGoogleAI,
 } from "./lib/google-ai-guide.mjs";
-import { classifyExternalLinkResults, computeIssueCounts, computeSiteScore } from "./lib/hardening.mjs";
+import {
+  annotateHeuristicIssue,
+  classifyExternalLinkResults,
+  computeIssueCounts,
+  computeSiteScore,
+} from "./lib/hardening.mjs";
 
 const TOOL_VERSION = "0.6.0";
+
+const HEURISTIC_CONFIDENCE = {
+  SPA_EMPTY_ROOT: "low",
+  JS_HEAVY_THIN_HTML: "low",
+  POSSIBLE_INTERSTITIAL: "low",
+  SOFT_404: "medium",
+  WEAK_TOPIC_CLUSTERS: "medium",
+  CRAWL_BUDGET_WASTE: "medium",
+  PAGINATION_CANONICAL_TO_PAGE_1: "medium",
+};
+
+function hardenIssues(issues = []) {
+  return issues.map((issue) => {
+    const confidence = HEURISTIC_CONFIDENCE[issue.code];
+    return confidence ? annotateHeuristicIssue(issue, confidence) : issue;
+  });
+}
 
 // ─────────────────────────────────────────────────────────────────
 // CLI args
@@ -219,7 +241,7 @@ async function main() {
     // GEO per-page (đính kèm signals SEO để check schema types)
     const geoResult = await analyzePageGeo({ ...page, signals });
     geoSignalsByUrl.set(page.finalUrl, geoResult.signals);
-    geoIssuesByUrl.set(page.finalUrl, geoResult.issues);
+    geoIssuesByUrl.set(page.finalUrl, hardenIssues(geoResult.issues));
 
     // Google AI guidance per-page checks (preview controls, schema completeness,
     // freshness, interstitial, JS rendering, soft 404, crawlable links).
@@ -232,7 +254,7 @@ async function main() {
     const soft404Result = await analyzeSoft404(page);
     const crawlableResult = await analyzeCrawlableLinks(page);
 
-    const gaIssues = [
+    const gaIssues = hardenIssues([
       ...previewResult.issues,
       ...articleResult.issues,
       ...productResult.issues,
@@ -241,7 +263,7 @@ async function main() {
       ...jsResult.issues,
       ...soft404Result.issues,
       ...crawlableResult.issues,
-    ];
+    ]);
     if (gaIssues.length) {
       const existing = issuesByUrl.get(page.finalUrl) || [];
       issuesByUrl.set(page.finalUrl, [...existing, ...gaIssues]);
@@ -270,6 +292,7 @@ async function main() {
   const llmsTxt = await checkLlmsTxt(origin, (u) => crawler.fetchWithTimeout(u));
   const robotsAi = analyzeRobotsForAI(crawlResult.robots);
   const geoSiteAnalysis = analyzeGeoSite(crawlResult.pages, signalsByUrl, geoSignalsByUrl, llmsTxt, robotsAi);
+  geoSiteAnalysis.issues = hardenIssues(geoSiteAnalysis.issues);
   console.log(`  ✓ GEO check xong: llms.txt ${llmsTxt.exists ? "✓" : "✗"} · AI bots access: ${robotsAi.aiAccess}`);
 
   // ── 2. Site-level analysis ─────────────────────────────────────
@@ -302,6 +325,7 @@ async function main() {
     pages: crawlResult.pages,
     signalsByUrl,
   });
+  googleAiAnalysis.issues = hardenIssues(googleAiAnalysis.issues);
 
   // ── 3. PSI (optional) ──────────────────────────────────────────
   let psiResults = [];
@@ -334,19 +358,19 @@ async function main() {
   // ── 5. Aggregate issues ────────────────────────────────────────
   const allIssues = [];
   for (const [url, issues] of issuesByUrl) {
-    for (const i of issues) allIssues.push({ ...i, url });
+    for (const i of hardenIssues(issues)) allIssues.push({ ...i, url });
   }
   for (const [url, issues] of geoIssuesByUrl) {
-    for (const i of issues) allIssues.push({ ...i, url });
+    for (const i of hardenIssues(issues)) allIssues.push({ ...i, url });
   }
-  for (const i of siteAnalysis.issues) allIssues.push(i);
-  for (const i of geoSiteAnalysis.issues) allIssues.push(i);
-  for (const i of hreflangAnalysis.issues) allIssues.push(i);
-  for (const i of internalRedirectAnalysis.issues) allIssues.push(i);
-  for (const i of sitemapQuality.issues) allIssues.push(i);
-  for (const i of securityAnalysis.issues) allIssues.push(i);
-  for (const i of googleAiAnalysis.issues) allIssues.push(i);
-  for (const i of psiIssues) allIssues.push(i);
+  for (const i of hardenIssues(siteAnalysis.issues)) allIssues.push(i);
+  for (const i of hardenIssues(geoSiteAnalysis.issues)) allIssues.push(i);
+  for (const i of hardenIssues(hreflangAnalysis.issues)) allIssues.push(i);
+  for (const i of hardenIssues(internalRedirectAnalysis.issues)) allIssues.push(i);
+  for (const i of hardenIssues(sitemapQuality.issues)) allIssues.push(i);
+  for (const i of hardenIssues(securityAnalysis.issues)) allIssues.push(i);
+  for (const i of hardenIssues(googleAiAnalysis.issues)) allIssues.push(i);
+  for (const i of hardenIssues(psiIssues)) allIssues.push(i);
 
   if (!crawlResult.robots.exists) allIssues.push({ severity: "warning", code: "ROBOTS_MISSING", message: "Không tìm thấy robots.txt", area: "technical" });
   if (!crawlResult.sitemapFound) allIssues.push({ severity: "warning", code: "SITEMAP_MISSING", message: "Không tìm thấy sitemap.xml", area: "technical" });
@@ -389,8 +413,9 @@ async function main() {
   // Top issues by code
   const byCode = new Map();
   for (const i of allIssues) {
-    if (!byCode.has(i.code)) byCode.set(i.code, { code: i.code, severity: i.severity, area: i.area, count: 0, sampleMessage: i.message, confidence: i.confidence || "high" });
+    if (!byCode.has(i.code)) byCode.set(i.code, { code: i.code, severity: i.severity, area: i.area, count: 0, sampleMessage: i.message, confidence: i.confidence || "high", manualVerify: !!i.manualVerify });
     byCode.get(i.code).count++;
+    if (i.manualVerify) byCode.get(i.code).manualVerify = true;
   }
   const topIssues = [...byCode.values()].sort((a, b) => {
     const sevOrder = { critical: 0, warning: 1, info: 2 };
@@ -400,10 +425,10 @@ async function main() {
 
   // ── 7. Build per-page output (with embedded signals + issues + per-page score)
   const pages = crawlResult.pages.map((p) => {
-    const pageIssues = [
+    const pageIssues = hardenIssues([
       ...(issuesByUrl.get(p.finalUrl) || []),
       ...(geoIssuesByUrl.get(p.finalUrl) || []),
-    ];
+    ]);
     return {
       url: p.url,
       finalUrl: p.finalUrl,
