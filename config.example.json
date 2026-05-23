@@ -1,0 +1,45 @@
+{
+  "_comment": "Copy file này thành config.json (cùng folder hoặc dùng --config) rồi sửa giá trị. Đây là branding cho báo cáo Deep Audit.",
+
+  "brand": {
+    "name": "Lalavn Deep Audit",
+    "tagline": "Báo cáo SEO chuyên sâu",
+    "logoText": "Lalavn",
+    "logoUrl": "",
+    "primaryColor": "#0f172a",
+    "accentColor": "#2563eb",
+    "website": "https://lalavn.com",
+    "email": "hello@lalavn.com",
+    "footer": "Bảo mật. Chỉ dùng nội bộ giữa Lalavn và khách hàng."
+  },
+
+  "crawl": {
+    "maxUrls": 200,
+    "maxDepth": 3,
+    "concurrency": 5,
+    "respectRobotsTxt": true,
+    "requestTimeoutMs": 15000,
+    "delayBetweenRequestsMs": 100,
+    "userAgent": "LalavnDeepAudit/0.2"
+  },
+
+  "checks": {
+    "imageMaxSizeKB": 200,
+    "thinContentMinWords": 300,
+    "titleMinLength": 30,
+    "titleMaxLength": 60,
+    "metaMinLength": 70,
+    "metaMaxLength": 160,
+    "slowResponseMs": 2500,
+    "brokenLinkCheck": true,
+    "brokenLinkSampleLimit": 200,
+    "psiEnabled": true,
+    "psiSampleSize": 5,
+    "psiStrategies": ["mobile", "desktop"]
+  },
+
+  "actionPlan": {
+    "enabled": true,
+    "estimateImpact": true
+  }
+}
